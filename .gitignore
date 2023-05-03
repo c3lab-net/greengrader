@@ -1,0 +1,14 @@
+__pycache__/
+gradescope_data.zip
+gradescope_data/
+logfile.txt
+ingest.log
+receiver.log
+nohup.out
+db_secret.txt
+mqtt_secret.txt
+kubectl
+res.sh
+job.sh
+job.yaml
+

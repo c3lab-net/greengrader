@@ -1,0 +1,97 @@
+#  This Kubernetes Pod configuration sets up a greengrader pod with three containers:
+# 1. An init container that synchronizes submission data from remote storage to a local volume
+# 2. A main container that runs the autograder, processes submissions, and stores results in the local volume
+# 3. A sidecar container that syncs the results back to the remote storage
+# Updated by pod.sh
+# The pod is uses affinity rules to run in the best selected region in pod.sh
+apiVersion: v1
+kind: Pod
+metadata:
+  name: greengrader-151402776
+spec:
+  # Secret setup: https://kubernetes.io/docs/concepts/configuration/secret/#use-case-pod-with-ssh-keys
+  volumes:
+    - name: secret-vol-cephs3-rclone-config
+      secret:
+        secretName: greengrader-app-secret
+    - name: data-vol
+      emptyDir: {}
+  initContainers:
+    - name: init-rclone-copy-to-local
+      image: gitlab-registry.nrp-nautilus.io/c3lab/common/rclone:1.61.1
+      # imagePullPolicy: Always
+      command: ["sh", "-c"]
+      args:
+        - >
+          mkdir /data-vol/submission && rclone sync greengrader-app:submission /data-vol/submission
+
+      volumeMounts:
+        - name: secret-vol-cephs3-rclone-config
+          readOnly: true
+          mountPath: "/root/.config/rclone/"
+        - name: data-vol
+          mountPath: /data-vol
+      resources:
+        requests:
+          memory: 128Mi
+          cpu: 500m
+          ephemeral-storage: 4Gi
+        limits:
+          memory: 128Mi
+          cpu: 1000m
+          ephemeral-storage: 4Gi
+  containers:
+    - name: autograder-pod-2455522
+      image: gitlab-registry.nrp-nautilus.io/c3lab/greengrader/autograder/2455522:1.0
+      imagePullPolicy: IfNotPresent
+      command: ["sh", "-c"]
+      args:
+        - >
+          echo "TIMESTART" && mv /data-vol/submission/* /autograder/submission && /autograder/run_autograder && mkdir /data-vol/results && mv /autograder/results/* /data-vol/results && echo "TIMEEND"
+
+      volumeMounts:
+        - name: data-vol
+          mountPath: /data-vol
+      resources:
+        requests:
+          memory: 256Mi
+          cpu: 1000m
+          ephemeral-storage: 4Gi
+        limits:
+          memory: 256Mi
+          cpu: 1000m
+          ephemeral-storage: 4Gi
+    - name: sidecar-sync
+      image: gitlab-registry.nrp-nautilus.io/c3lab/common/rclone:1.61.1
+      command: ["sh", "-c"]
+      args:
+        - >
+          while :; do [ -d "/data-vol/results" ] && break || sleep 30; done && rclone sync /data-vol/results greengrader-app:results
+
+      volumeMounts:
+        - name: secret-vol-cephs3-rclone-config
+          readOnly: true
+          mountPath: "/root/.config/rclone/"
+        - name: data-vol
+          mountPath: /data-vol
+      resources:
+        requests:
+          memory: 128Mi
+          cpu: 500m
+          ephemeral-storage: 4Gi
+        limits:
+          memory: 128Mi
+          cpu: 1000m
+          e10100phemeral-storage: 4Gi
+  affinity:
+    nodeAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        nodeSelectorTerms:
+          - matchExpressions:
+              - key: topology.kubernetes.io/region
+                operator: In
+                values:
+                  - us-west
+  restartPolicy: Never
+  imagePullSecrets:
+    - name: regcred
