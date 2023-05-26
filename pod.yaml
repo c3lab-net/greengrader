@@ -82,16 +82,17 @@ spec:
         limits:
           memory: 128Mi
           cpu: 1000m
-          e10100phemeral-storage: 4Gi
+          ephemeral-storage: 4Gi
   affinity:
     nodeAffinity:
-      requiredDuringSchedulingIgnoredDuringExecution:
-        nodeSelectorTerms:
-          - matchExpressions:
+      preferredDuringSchedulingIgnoredDuringExecution:
+        - weight: 1
+          preference:
+            matchExpressions:
               - key: topology.kubernetes.io/region
                 operator: In
                 values:
-                  - us-west
+                  - "ca-east.ottawa"
   restartPolicy: Never
   imagePullSecrets:
     - name: regcred
