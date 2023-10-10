@@ -11,6 +11,7 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy import create_engine, func, cast, select
 from models import Submission, Assignment
 import logging
+import shutil
 import subprocess
 import random
 import json
@@ -56,29 +57,42 @@ def build_container(assignment_id):
 # Takes in raw binary payload, unzips, and converts metadata into dict
 def process_submission(payload):
     logger.info('Writing payload to filesystem...')
+    
+    if os.path.exists(os.getcwd()+'/gradescope_data.zip'):
+        os.remove(os.getcwd()+'/gradescope_data.zip')
+
+    if os.path.exists(os.getcwd()+'/gradescope_data'):
+        shutil.rmtree(os.getcwd()+'/gradescope_data')
+
     with open(os.getcwd()+'/gradescope_data.zip', 'wb') as f:
         f.write(payload)
     logger.info('Unzipping contents...')
+
     subprocess.run(['unzip','gradescope_data.zip'], check=True)
     logger.info('Parsing JSON...')
-    with open(os.getcwd()+'/gradescope_data/submission_metadata.json') as f:
-        submission_metadata = json.load(f)
-    with open(os.getcwd()+'/gradescope_data/hostname.txt') as f:
-        submission_metadata['sender_ip'] = f.read()[:-2]
-    submission_metadata['receiver_ip'] = '169.228.66.29' # c10-01
-    logger.info('Submission data successfully captured.')
 
-    # Check the database for existing assignment record
-    assignment_id = submission_metadata['assignment']['id']
-    query = select(Assignment).where(Assignment.id == assignment_id)
-    output = session.execute(query)
-    results = output.fetchall()
+    
+    if os.path.exists(os.getcwd()+'/gradescope_data/submission_metadata.json'):
+        with open(os.getcwd()+'/gradescope_data/submission_metadata.json') as f:
+            submission_metadata = json.load(f)
+        with open(os.getcwd()+'/gradescope_data/hostname.txt') as f:
+            submission_metadata['sender_ip'] = f.read()[:-2]
+        submission_metadata['receiver_ip'] = '169.228.66.29' # c10-01
+        logger.info('Submission metadata successfully captured.')
 
-    # If assignment doesn't exist, build the container and upload it to nautilus registry
-    if len(results) == 0:
-        build_container(assignment_id)
+        # Check the database for existing assignment record
+        assignment_id = submission_metadata['assignment']['id']
+        query = select(Assignment).where(Assignment.id == assignment_id)
+        output = session.execute(query)
+        results = output.fetchall()
 
-    return submission_metadata
+        # If assignment doesn't exist, build the container and upload it to nautilus registry
+        if len(results) == 0:
+            build_container(assignment_id)
+
+        return submission_metadata
+    else:
+        return 0
 
 # Takes in metadata dict, commits relevant data to postgres
 def commit_submission(metadata):
@@ -140,8 +154,13 @@ def subscribe(client: mqtt_client):
     def on_message(client, userdata, msg):
         logger.info('Submission received.')
         metadata = process_submission(msg.payload)
-        logger.info('Submission processed.')
-        commit_submission(metadata)
+        
+        if metadata == 0:
+            logger.info('ERROR: No metadata found in submission!')
+        else:
+            logger.info('Submission processed.')
+            commit_submission(metadata)
+        
         logger.info('Removing temporary files...')
         subprocess.run(['rm','-rf','gradescope_data','gradescope_data.zip'])
     client.subscribe(topic)
