@@ -32,7 +32,7 @@ echo "$region_code"
 yq eval -i ".metadata.name = \"greengrader-${submissionID}\"" pod.yaml
 yq eval -i ".spec.containers[0].name = \"autograder-pod-${assignmentID}\"" pod.yaml
 yq eval -i ".spec.containers[0].image |= sub(\"gitlab-registry.nrp-nautilus.io/c3lab/greengrader/autograder/[^\:]*\"; \"gitlab-registry.nrp-nautilus.io/c3lab/greengrader/autograder/${assignmentID}\")" pod.yaml
-yq eval -i ".spec.affinity.nodeAffinity.preferredDuringSchedulingIgnoredDuringExecution.nodeSelectorTerms[0].matchExpressions[0].values[0] = \"$region_code\"" pod.yaml
+yq eval -i ".spec.affinity.nodeAffinity.preferredDuringSchedulingIgnoredDuringExecution[0].preference.matchExpressions[0].values[0] = \"$region_code\"" pod.yaml
 
  # Edit YAML file using sed
 # sed -i "s/name: greengrader-[^ ]*/name: greengrader-${submissionID}/" greentest.yaml
@@ -79,7 +79,7 @@ rclone copy greengrader-app:results ./gradescope_data/results
 rclone lsf --format "ts" greengrader-app:results/
 
 # Extract node
-node_data=$(kubectl describe pod "greengrader-$submissionId"  | grep -m1 "Node" | awk '{print $2}')
+node_data=$(kubectl describe pod "greengrader-$submissionID"  | grep -m1 "Node" | awk '{print $2}')
 node=$(echo $node_data | cut -d'/' -f1)
 node_ip=$(echo $node_data | cut -d'/' -f2)
 node_lat=$(curl -s ipinfo.io/$node_ip | jq -r .loc | sed 's/^\([0-9]\+\.[0-9]\+\),\(-*[0-9]\+\.[0-9]\+\)$/\1/')
@@ -98,11 +98,38 @@ execution_time=$((cte - cts))
 total_time=$((tte - tts))
 total_time_sec=$((total_time / 1000))
 
-psql -d greengrader -c "INSERT INTO results (id, submission_id, server, visibility, tests, leaderboard, score, execution_time, total_time, execution_power, carbon_intensity, region, node, node_ip) VALUES ($db_id, $submissionID, 'c10-01', '$visibility', ARRAY$tests::json[], ARRAY$leaderboard::json[], $score, $execution_time, $total_time, 0.0, 0.0, '$region_code', '$node', '$node_ip'::inet);"
-
 carbon_response=$(curl --header "Content-Type: application/json" \
           --request GET \
-            --data '{"runtime":'$total_time_sec',"schedule":{"type":"onetime","start_time":"'${start_time}'","max_delay":0},"dataset":{"input_size_gb":0,"output_size_gb":0}, "candidate_locations": [{"id": "Nautilus:'$region_code'", "latitude": '$node_lat', "longitude": '$node_lon'}],"use_prediction": true,"carbon_data_source": "azure"}' \
-              https://cas-carbon-api-dev.nrp-nautilus.io/carbon-aware-scheduler/)
+          --data "{\"runtime\":$total_time_sec,\"schedule\":{\"type\":\"onetime\",\"start_time\":\"${start_time}\",\"max_delay\":0},\"dataset\":{\"input_size_gb\":0,\"output_size_gb\":0}, \"candidate_locations\": [{\"id\": \"Nautilus:${region_code}\"}],\"use_prediction\": true,\"carbon_data_source\": \"azure\"}" \
+          https://cas-carbon-api-dev.nrp-nautilus.io/carbon-aware-scheduler/)
 
 echo $carbon_response
+
+# Extract details about execution using jq
+energy_usage=$(echo "$carbon_response" | jq -r --arg region "Nautilus:$region_code" '.["raw-scores"][$region]."energy-usage"')
+carbon_emission_from_compute=$(echo "$carbon_response" | jq -r --arg region "Nautilus:$region_code" '.["raw-scores"][$region]."carbon-emission-from-compute"')
+carbon_emission_from_migration=$(echo "$carbon_response" | jq -r --arg region "Nautilus:$region_code" '.["raw-scores"][$region]."carbon-emission-from-migration"')
+carbon_emission=$(echo "$carbon_response" | jq -r --arg region "Nautilus:$region_code" '.["raw-scores"][$region]."carbon-emission"')
+
+# Populate results table
+psql -d greengrader \
+     -v v_db_id="$db_id" \
+     -v v_submission_id="$submissionID" \
+     -v v_server="c10-01" \
+     -v v_visibility="$visibility" \
+     -v v_tests="$tests" \
+     -v v_leaderboard="$leaderboard" \
+     -v v_score="$score" \
+     -v v_start_time="$start_time" \
+     -v v_execution_time="$execution_time" \
+     -v v_total_time="$total_time" \
+     -v v_energy_usage="$energy_usage" \
+     -v v_carbon_emission_from_compute="$carbon_emission_from_compute" \
+     -v v_carbon_emission_from_migration="$carbon_emission_from_migration" \
+     -v v_carbon_emission="$carbon_emission" \
+     -v v_region_code="$region_code" \
+     -v v_node="$node" \
+     -v v_node_ip="$node_ip" \
+     -v v_node_lat="$node_lat" \
+     -v v_node_lon="$node_lon" \
+     -a -f insert.sql

@@ -7,7 +7,7 @@
 apiVersion: v1
 kind: Pod
 metadata:
-  name: greengrader-151402776
+  name: greengrader-151399465
 spec:
   # Secret setup: https://kubernetes.io/docs/concepts/configuration/secret/#use-case-pod-with-ssh-keys
   volumes:
@@ -92,7 +92,7 @@ spec:
               - key: topology.kubernetes.io/region
                 operator: In
                 values:
-                  - "ca-east.ottawa"
+                  - "eu.uk"
   restartPolicy: Never
   imagePullSecrets:
     - name: regcred
