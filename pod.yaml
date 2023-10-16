@@ -92,7 +92,11 @@ spec:
               - key: topology.kubernetes.io/region
                 operator: In
                 values:
-                  - "eu.uk"
+                  - "us-west"
+              - key: topology.kubernetes.io/zone
+                operator: In
+                values:
+                  - "stanford"
   restartPolicy: Never
   imagePullSecrets:
     - name: regcred

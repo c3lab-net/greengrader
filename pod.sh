@@ -23,22 +23,23 @@ response=$(curl --header "Content-Type: application/json" \
 echo "$response"
 
 # Extract selected region from the response
-region_code=$(echo "$response" | jq -r '.["optimal-regions"][0]' | sed 's/.*://')
+#region_string=$(echo "$response" | jq -r '.["optimal-regions"][0]')
 # searches for '-'' followed by '0-9' -> replaces with empty string
 # region_code=$(echo "$selected_region" | cut -d ':' -f 2 | sed 's/-[0-9]$//')
-echo "$region_code"
+#echo "$region_string"
+
+region_string=$(echo "$response" | jq -r '.["optimal-regions"][0]')
+expected_region_code=$(echo "$region_string" | cut -d ':' -f 2 | cut -d '.' -f 1)
+expected_zone_code=$(echo "$region_string" | cut -d ':' -f 2 | cut -d '.' -f 2)
+expected_region_and_zone_code="$expected_region_code.$expected_zone_code"
 
 # Edit pod YAML file using yq
 yq eval -i ".metadata.name = \"greengrader-${submissionID}\"" pod.yaml
 yq eval -i ".spec.containers[0].name = \"autograder-pod-${assignmentID}\"" pod.yaml
 yq eval -i ".spec.containers[0].image |= sub(\"gitlab-registry.nrp-nautilus.io/c3lab/greengrader/autograder/[^\:]*\"; \"gitlab-registry.nrp-nautilus.io/c3lab/greengrader/autograder/${assignmentID}\")" pod.yaml
-yq eval -i ".spec.affinity.nodeAffinity.preferredDuringSchedulingIgnoredDuringExecution[0].preference.matchExpressions[0].values[0] = \"$region_code\"" pod.yaml
-
- # Edit YAML file using sed
-# sed -i "s/name: greengrader-[^ ]*/name: greengrader-${submissionID}/" greentest.yaml
-# sed -i "s/\(name: autograder-pod-\)[^ ]*/\1${assignmentID}/" greentest.yaml
-# sed -i "s/\(gitlab-registry\.nrp-nautilus\.io\/c3lab\/greengrader\/autograder\/\)[^:]*\(:1\.0\)/\1${assignmentID}\2/" greentest.yaml
-#sed -i "s/\(values:\n\s*-\s*\)[^ ]*/\1${region_code}/" greentest.yaml
+yq eval -i ".spec.affinity.nodeAffinity.preferredDuringSchedulingIgnoredDuringExecution[0].preference.matchExpressions[0].values[0] = \"$expected_region_code\"" pod.yaml
+# add zone code
+yq eval -i ".spec.affinity.nodeAffinity.preferredDuringSchedulingIgnoredDuringExecution[0].preference.matchExpressions[1].values[0] = \"$expected_zone_code\"" pod.yaml
 
 # Record turnaround timestart
 tts=$(date +"%s%3N")
@@ -88,6 +89,11 @@ node_lon=$(curl -s ipinfo.io/$node_ip | jq -r .loc | sed 's/^\([0-9]\+\.[0-9]\+\
 # Delete pod
 kubectl delete pod greengrader-${submissionID}
 
+# Extract region and zone from actual node
+actual_region_code=$(kubectl describe node $node | grep "topology.kubernetes.io/region" | awk -F= '{print $2}' | tr -d '[:space:]')
+actual_zone_code=$(kubectl describe node $node | grep "topology.kubernetes.io/zone" | awk -F= '{print $2}' | tr -d '[:space:]')
+actual_region_and_zone_code="$actual_region_code.$actual_zone_code"
+
 # Extract values from metadata
 db_id=$(psql -d greengrader -c "SELECT id FROM submissions WHERE submission_id=$submissionID" | sed -n '3p' | bc)
 visibility=$(jq .visibility ./gradescope_data/results/results.json | sed 's/\"//g')
@@ -98,18 +104,19 @@ execution_time=$((cte - cts))
 total_time=$((tte - tts))
 total_time_sec=$((total_time / 1000))
 
+# fetch metrics for the run
 carbon_response=$(curl --header "Content-Type: application/json" \
           --request GET \
-          --data "{\"runtime\":$total_time_sec,\"schedule\":{\"type\":\"onetime\",\"start_time\":\"${start_time}\",\"max_delay\":0},\"dataset\":{\"input_size_gb\":0,\"output_size_gb\":0}, \"candidate_locations\": [{\"id\": \"Nautilus:${region_code}\"}],\"use_prediction\": true,\"carbon_data_source\": \"azure\"}" \
+          --data "{\"runtime\":$total_time_sec,\"schedule\":{\"type\":\"onetime\",\"start_time\":\"${start_time}\",\"max_delay\":0},\"dataset\":{\"input_size_gb\":0,\"output_size_gb\":0}, \"candidate_locations\": [{\"id\": \"Nautilus:${actual_region_and_zone_code}\"}],\"use_prediction\": true,\"carbon_data_source\": \"azure\"}" \
           https://cas-carbon-api-dev.nrp-nautilus.io/carbon-aware-scheduler/)
 
 echo $carbon_response
 
 # Extract details about execution using jq
-energy_usage=$(echo "$carbon_response" | jq -r --arg region "Nautilus:$region_code" '.["raw-scores"][$region]."energy-usage"')
-carbon_emission_from_compute=$(echo "$carbon_response" | jq -r --arg region "Nautilus:$region_code" '.["raw-scores"][$region]."carbon-emission-from-compute"')
-carbon_emission_from_migration=$(echo "$carbon_response" | jq -r --arg region "Nautilus:$region_code" '.["raw-scores"][$region]."carbon-emission-from-migration"')
-carbon_emission=$(echo "$carbon_response" | jq -r --arg region "Nautilus:$region_code" '.["raw-scores"][$region]."carbon-emission"')
+energy_usage=$(echo "$carbon_response" | jq -r --arg region "Nautilus:$actual_region_and_zone_code" '.["raw-scores"][$region]."energy-usage"')
+carbon_emission_from_compute=$(echo "$carbon_response" | jq -r --arg region "Nautilus:$actual_region_and_zone_code" '.["raw-scores"][$region]."carbon-emission-from-compute"')
+carbon_emission_from_migration=$(echo "$carbon_response" | jq -r --arg region "Nautilus:$actual_region_and_zone_code" '.["raw-scores"][$region]."carbon-emission-from-migration"')
+carbon_emission=$(echo "$carbon_response" | jq -r --arg region "Nautilus:$actual_region_and_zone_code" '.["raw-scores"][$region]."carbon-emission"')
 
 # Populate results table
 psql -d greengrader \
@@ -127,7 +134,7 @@ psql -d greengrader \
      -v v_carbon_emission_from_compute="$carbon_emission_from_compute" \
      -v v_carbon_emission_from_migration="$carbon_emission_from_migration" \
      -v v_carbon_emission="$carbon_emission" \
-     -v v_region_code="$region_code" \
+     -v v_region_code="$actual_region_and_zone_code" \
      -v v_node="$node" \
      -v v_node_ip="$node_ip" \
      -v v_node_lat="$node_lat" \
