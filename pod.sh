@@ -22,16 +22,14 @@ response=$(curl --header "Content-Type: application/json" \
 
 echo "$response"
 
-# Extract selected region from the response
-#region_string=$(echo "$response" | jq -r '.["optimal-regions"][0]')
-# searches for '-'' followed by '0-9' -> replaces with empty string
-# region_code=$(echo "$selected_region" | cut -d ':' -f 2 | sed 's/-[0-9]$//')
-#echo "$region_string"
-
 region_string=$(echo "$response" | jq -r '.["optimal-regions"][0]')
 expected_region_code=$(echo "$region_string" | cut -d ':' -f 2 | cut -d '.' -f 1)
 expected_zone_code=$(echo "$region_string" | cut -d ':' -f 2 | cut -d '.' -f 2)
 expected_region_and_zone_code="$expected_region_code.$expected_zone_code"
+
+echo "Expected region code - $expected_region_code"
+echo "Expected zone code - $expected_zone_code"
+echo "Expected region and zone - $expected_region_and_zone_code"
 
 # Edit pod YAML file using yq
 yq eval -i ".metadata.name = \"greengrader-${submissionID}\"" pod.yaml
