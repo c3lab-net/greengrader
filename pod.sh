@@ -22,14 +22,21 @@ response=$(curl --header "Content-Type: application/json" \
 
 echo "$response"
 
-region_string=$(echo "$response" | jq -r '.["optimal-regions"][0]')
-expected_region_code=$(echo "$region_string" | cut -d ':' -f 2 | cut -d '.' -f 1)
-expected_zone_code=$(echo "$region_string" | cut -d ':' -f 2 | cut -d '.' -f 2)
-expected_region_and_zone_code="$expected_region_code.$expected_zone_code"
+weighted_scores=$(echo "$response" | jq -r '.["weighted-scores"]' ) 
+#echo "$weighted_scores"
+
+# use external python script to find the optimal untainted node (region + zone)
+region_zone=$(python3 fetch_zone.py "$weighted_scores")
+expected_region_code=$(echo "$region_zone" | cut -d '.' -f 1)
+expected_zone_code=$(echo "$region_zone"| cut -d '.' -f 2 )
+
+# region_string=$(echo "$response" | jq -r '.["optimal-regions"][0]')
+# expected_region_code=$(echo "$region_string" | cut -d ':' -f 2 | cut -d '.' -f 1)
+# expected_zone_code=$(echo "$region_string" | cut -d ':' -f 2 | cut -d '.' -f 2)
+# expected_region_and_zone_code="$expected_region_code.$expected_zone_code"
 
 echo "Expected region code - $expected_region_code"
 echo "Expected zone code - $expected_zone_code"
-echo "Expected region and zone - $expected_region_and_zone_code"
 
 # Edit pod YAML file using yq
 yq eval -i ".metadata.name = \"greengrader-${submissionID}\"" pod.yaml
@@ -80,9 +87,10 @@ rclone lsf --format "ts" greengrader-app:results/
 # Extract node
 node_data=$(kubectl describe pod "greengrader-$submissionID"  | grep -m1 "Node" | awk '{print $2}')
 node=$(echo $node_data | cut -d'/' -f1)
-node_ip=$(echo $node_data | cut -d'/' -f2)
-node_lat=$(curl -s ipinfo.io/$node_ip | jq -r .loc | sed 's/^\([0-9]\+\.[0-9]\+\),\(-*[0-9]\+\.[0-9]\+\)$/\1/')
-node_lon=$(curl -s ipinfo.io/$node_ip | jq -r .loc | sed 's/^\([0-9]\+\.[0-9]\+\),\(-*[0-9]\+\.[0-9]\+\)$/\2/')
+
+# node_ip=$(echo $node_data | cut -d'/' -f2)
+# node_lat=$(curl -s ipinfo.io/$node_ip | jq -r .loc | sed 's/^\([0-9]\+\.[0-9]\+\),\(-*[0-9]\+\.[0-9]\+\)$/\1/')
+# node_lon=$(curl -s ipinfo.io/$node_ip | jq -r .loc | sed 's/^\([0-9]\+\.[0-9]\+\),\(-*[0-9]\+\.[0-9]\+\)$/\2/')
 
 # Delete pod
 kubectl delete pod greengrader-${submissionID}
