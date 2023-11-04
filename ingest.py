@@ -18,6 +18,11 @@ import json
 import time
 import os   
 
+# Anonymous PII constants
+ANON_NAME = 'John Doe'
+ANON_EMAIL = 'johndoe@uni.edu'
+ANON_PID = 'A00000000'
+
 # Logging credentials
 logging.basicConfig(level=logging.DEBUG,handlers=[logging.FileHandler('ingest.log', mode='a')],format='%(asctime)s %(message)s')
 logger = logging.getLogger(__name__)
@@ -41,8 +46,9 @@ username = 'admin'
 with open('mqtt_secret.txt') as f:
     password = f.read()[:-1]
 
-# Builds assignment Docker container and pushes it to private registry
 def build_container(assignment_id):
+    """Builds assignment Docker container and pushes it to private registry."""
+
     print('Building container...')
     subprocess.run(['cp', os.getcwd()+'/Dockerfile', os.getcwd()+'/gradescope_data/Dockerfile'], check=True)
     subprocess.run(['docker', 'build', '--no-cache', '-t', 'gitlab-registry.nrp-nautilus.io/c3lab/greengrader/autograder/'+str(assignment_id)+':1.0', '.'], cwd=os.getcwd()+'/gradescope_data', check=True)
@@ -54,8 +60,24 @@ def build_container(assignment_id):
     session.add(assignment)
     session.commit()
 
-# Takes in raw binary payload, unzips, and converts metadata into dict
+def remove_pdf_files(dir):
+    """Removes all PDF files that are part of the student submission."""
+
+    logger.info(f'Recursively removing pdf files from directory path : {dir}')
+    
+    for root, _, files in os.walk(dir):    
+        for filename in files:
+            if filename.endswith('.pdf'):
+                file_path = os.path.join(root, filename)
+                try:
+                    os.remove(file_path)
+                    logger.info(f'Removed PDF file: {file_path}')
+                except Exception as e:
+                    logger.error(f'Error while removing PDF file {file_path}: {str(e)}')
+
 def process_submission(payload):
+    """Takes in raw binary payload, unzips, and converts metadata into dict."""
+
     logger.info('Writing payload to filesystem...')
     
     if os.path.exists(os.getcwd()+'/gradescope_data.zip'):
@@ -71,10 +93,32 @@ def process_submission(payload):
     subprocess.run(['unzip','gradescope_data.zip'], check=True)
     logger.info('Parsing JSON...')
 
-    
-    if os.path.exists(os.getcwd()+'/gradescope_data/submission_metadata.json'):
-        with open(os.getcwd()+'/gradescope_data/submission_metadata.json') as f:
+    #strip out pdf files
+    submission_directory = os.path.join(os.getcwd(), 'gradescope_data', 'submission')
+    if os.path.exists(submission_directory):
+        remove_pdf_files(submission_directory)
+    else:
+        logger.info('Submission directory does not exist')
+   
+    metadata_path = os.getcwd() + '/gradescope_data/submission_metadata.json'
+    if os.path.exists(metadata_path):
+        with open(metadata_path) as f:
             submission_metadata = json.load(f)
+        
+        # anonymize pii
+        for user in submission_metadata['users']:
+            user['email'] = ANON_EMAIL
+            user['name'] = ANON_NAME
+            user['sid'] = ANON_PID
+        
+        # overwrite submission_metadata
+        with open(metadata_path, 'w') as f:
+            json.dump(submission_metadata, f)
+
+        # zip the modified gradescope_data
+        shutil.make_archive('gradescope_data', 'zip', './gradescope_data')
+
+        # capture ip of the producer server
         with open(os.getcwd()+'/gradescope_data/hostname.txt') as f:
             submission_metadata['sender_ip'] = f.read()[:-2]
         submission_metadata['receiver_ip'] = '169.228.66.29' # c10-01
@@ -94,8 +138,10 @@ def process_submission(payload):
     else:
         return 0
 
-# Takes in metadata dict, commits relevant data to postgres
 def commit_submission(metadata):
+    """ Takes in metadata dict, commits relevant data to postgres.
+    """
+    
     # Create new submission object
     submission = Submission(
         submission_id=metadata["id"],
@@ -162,7 +208,7 @@ def subscribe(client: mqtt_client):
             commit_submission(metadata)
         
         logger.info('Removing temporary files...')
-        subprocess.run(['rm','-rf','gradescope_data','gradescope_data.zip'])
+        #subprocess.run(['rm','-rf','gradescope_data','gradescope_data.zip'])
     client.subscribe(topic)
     client.on_message = on_message
 
