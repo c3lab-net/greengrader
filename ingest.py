@@ -60,12 +60,12 @@ def build_container(assignment_id):
     session.add(assignment)
     session.commit()
 
-def remove_pdf_files(dir):
+def remove_pdf_files(path):
     """Removes all PDF files that are part of the student submission."""
 
-    logger.info(f'Recursively removing pdf files from directory path : {dir}')
+    logger.info(f'Recursively removing pdf files from directory path : {path}')
     
-    for root, _, files in os.walk(dir):    
+    for root, _, files in os.walk(path):    
         for filename in files:
             if filename.endswith('.pdf'):
                 file_path = os.path.join(root, filename)
@@ -74,6 +74,35 @@ def remove_pdf_files(dir):
                     logger.info(f'Removed PDF file: {file_path}')
                 except Exception as e:
                     logger.error(f'Error while removing PDF file {file_path}: {str(e)}')
+
+def anonymize_code_files(path, name, email, pid):
+    """Replace PII in code files.
+       WARNING - This is a stop-gap solution.
+       Might cause problems when PII itself is part of the code, or only partial PII is present. 
+       A more elegant solution is to strip out all comments.
+    """
+    
+    logger.info(f'Replacing pii in code files from directory path: {path}')
+
+    for root, _, files in os.walk(path):
+        for f in files:
+            file_path = os.path.join(root, f)
+            try:
+                with open(file_path, 'r+') as fp:
+                    content = fp.read()
+
+                    content = content.replace(name, ANON_NAME)
+                    content = content.replace(email, ANON_EMAIL)
+                    content = content.replace(pid, ANON_PID)
+
+                    fp.seek(0)
+                    fp.write(content)
+                    fp.truncate()
+
+            except IOError as e:
+                logger.error(f"IOError while processing {path}: {e}")
+            except Exception as e:
+                logger.error(f"Error replacing PII in code file {f} - {e}")
 
 def process_submission(payload):
     """Takes in raw binary payload, unzips, and converts metadata into dict."""
@@ -94,18 +123,22 @@ def process_submission(payload):
     logger.info('Parsing JSON...')
 
     #strip out pdf files
-    submission_directory = os.path.join(os.getcwd(), 'gradescope_data', 'submission')
+    submission_directory = os.path.join(os.getcwd(), 'gradescope_data/autograder', 'submission')
     if os.path.exists(submission_directory):
         remove_pdf_files(submission_directory)
     else:
         logger.info('Submission directory does not exist')
    
-    metadata_path = os.getcwd() + '/gradescope_data/submission_metadata.json'
+    metadata_path = os.getcwd() + '/gradescope_data/autograder/submission_metadata.json'
     if os.path.exists(metadata_path):
         with open(metadata_path) as f:
             submission_metadata = json.load(f)
         
-        # anonymize pii
+        # anonymize pii in code files
+        for user in submission_metadata['users']:
+            anonymize_code_files(submission_directory, user['name'], user['email'], user['sid'])
+
+        # anonymize pii in metadata
         for user in submission_metadata['users']:
             user['email'] = ANON_EMAIL
             user['name'] = ANON_NAME
