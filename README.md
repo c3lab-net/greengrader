@@ -12,8 +12,8 @@ hostname -I > hostname.txt
 mkdir gradescope
 mkdir autograder
 cd ..
-cp -a /gradescope/. /gradescope_data/
-cp -a /autograder/. /gradescope_data/
+cp -a /gradescope/. /gradescope_data/gradescope/
+cp -a /autograder/. /gradescope_data/autograder/
 zip -r gradescope_data.zip gradescope_data
 mosquitto_pub -h <ingestion host> -u <mosquitto username> -P <mosquitto password> -t submissions -f gradescope_data.zip
 ```
